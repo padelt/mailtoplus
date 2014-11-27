@@ -1,0 +1,452 @@
+#!/usr/bin/env python
+# encoding: utf-8
+"""Takes a URL in mailtoplus format and parses it to open
+one or more new e-mails in Mail.app on MacOS X.
+Optionally, attachments can be downloaded from provided
+locations via HTTP/HTTPS.
+To control Mail.app, an AppleScript is launched.
+"""
+"""
+   Copyright 2014 Philipp Adelt
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+"""
+
+import sys
+import re
+import urllib2
+import urlparse
+import shutil
+import tempfile
+import os.path
+import yaml
+import base64
+import time
+import platform
+from subprocess import Popen, PIPE
+
+__author__ = "Philipp Adelt"
+__copyright__ = "Copyright 2014"
+__credits__ = ["Philipp Adelt"]
+__license__ = "Apache License 2.0"
+__version__ = "2.0.4"
+__date__ = "2014-11-27"
+__maintainer__ = "Philipp Adelt"
+__email__ = "autosort-github@philipp.adelt.net"
+__status__ = "Release"
+
+import Tkinter
+import tkMessageBox
+
+scheme = 'mailtoplus'
+
+class WrongSchemeException(Exception):
+    pass
+
+class MalformedUriException(Exception):
+    pass
+
+class MalformedAttachmentException(Exception):
+    pass
+
+class FileNotFoundException(Exception):
+    pass
+
+class IllegalArgumentError(ValueError):
+    pass
+
+class MailClientAutomationException(Exception):
+    pass
+
+class DownloadException(Exception):
+    pass
+
+def fileurl2path(fileurl):
+    return re.sub("^file://", "", fileurl)
+
+def path2fileurl(path):
+    return "file://{0}".format(path).replace("\\", "/")
+
+class ConfigManager():
+    def __init__(self):
+        self.clear()
+        self.tempdir = None
+        self.tempfiles = []
+        self.tempfile_counter = 0
+
+    def clear(self):
+        self.configuration = {
+            'safe_regions': {},
+            'options': {},
+        }
+
+    def load_configuration(self, fullfilename):
+        with open(fullfilename, 'r') as f:
+            self.read_configuration(f)
+
+    def save_configuration(self, fullfilename):
+        with open(fullfilename, 'w') as f:
+            self.write_configuration(f)
+
+    def default_location(self):
+        return os.path.join(os.path.expanduser("~"), ".mailtoplus.conf")
+
+    def read_configuration(self, filelike):
+        self.clear()
+
+        config = yaml.load(filelike.read())
+        if not isinstance(config, dict):
+            return
+
+        regions = config.get('safe_regions', None)
+        if regions and isinstance(regions, dict):
+            for region in regions.values():
+                if not isinstance(region, dict):
+                    continue
+                try:
+                    valid = True
+                    d = {}
+                    for key in ('method', 'source', 'action'):
+                        if not isinstance(region[key], basestring):
+                            valid = False
+                        d[key] = region[key]
+
+                    if not d['action'] in ('allowed', 'forbidden'):
+                        valid = False
+
+                    if valid:
+                        self.configuration['safe_regions'][u",".join([d['method'], d['source']])] = d
+                except:
+                    raise
+
+        options = config.get('options', None)
+        if options and isinstance(options, dict):
+            for key, value in options.items():
+                if isinstance(key, basestring) and isinstance(value, basestring):
+                    self.configuration['options'][key] = value
+
+    def write_configuration(self, filelike):
+        filelike.write(yaml.dump(self.configuration))
+
+    def get_region(self, method, source, test=False):
+        """Gets the canonical region.
+        For local files, that is the directory the file is in.
+        For URLs, this is the access method (HTTP, HTTPS) and server name.
+        """
+        if method == 'local' and source.startswith("file://"):
+            localpath = fileurl2path(source)
+            if not os.path.isfile(localpath) and not test:
+                raise FileNotFoundException()
+            return path2fileurl(os.path.abspath(os.path.dirname(localpath)))+"/"
+        elif method == 'url':
+            pr = urlparse.urlparse(source)
+            if pr.scheme.lower() not in ('http', 'https'):
+                raise MalformedUriException("scheme '{0}' not allowed.".format(pr.scheme))
+            if not pr.netloc:
+                raise MalformedUriException("Empty net location not allowed.")
+            netloc = re.sub(r"^.*@", "", pr[1]) # strip credentials
+            region = "{0}://{1}".format(pr[0], netloc)
+            return region
+        else:
+            raise MalformedUriException("Unknown method '{0}' or malformed source '{1}'.".format(method, source))
+
+
+    def get_safety(self, method, source, test=False):
+        """Determine if a decision about safety is stored in the current configuration.
+        Returns 'allowed', 'forbidden' or None if no information is available.
+        """
+        region = self.get_region(method, source, test=test)
+        return self.configuration['safe_regions'].get(u",".join([method, region]), {}).get('action', None)
+
+    def set_safety(self, method, source, action, test=False):
+        if not method in ('local', 'url') or not action in ('allowed', 'forbidden'):
+            raise IllegalArgumentError()
+        region = self.get_region(method, source, test=test)
+        self.configuration['safe_regions'][u','.join([method, region])] = {
+            'method': method,
+            'source': region,
+            'action': action,
+        }
+
+    def get_tempdir(self):
+        if not self.tempdir:
+            self.tempdir = os.path.join(os.path.expanduser("~"), ".mailtoplus-temp")
+        return self.tempdir
+
+    def get_tempfilename(self, filename):
+        directory = None
+        while not directory or os.path.exists(directory):
+            self.tempfile_counter += 1
+            directory = os.path.join(self.get_tempdir(), "att{}".format(self.tempfile_counter))
+
+        os.makedirs(directory)
+        tfilename = os.path.join(directory, filename)
+
+        self.tempfiles.append(tfilename)
+        return tfilename
+
+    def cleanup_tempdir(self):
+        for tfile in self.tempfiles:
+            os.remove(tfile)
+            os.rmdir(os.path.dirname(tfile))
+        self.tempfiles = []
+
+class Mailtoplus():
+    def __init__(self):
+        self.re_pair = re.compile(r"^([^&=]+)=([^&=]+)$")
+
+    def __decode_addresses(self, addresses):
+        return map(self.__decode, addresses.split(","))
+
+    def __decode(self, text):
+        unquoted = urllib2.unquote(text)
+        try:
+            return unquoted.decode("utf-8")
+        except UnicodeDecodeError, e:
+            raise MalformedUriException("The unquoting '%s' did not yield a valid UTF-8 encoded string." % text)
+
+    def parse_uri(self, uri):
+        emails = []
+        if not uri:
+            return emails
+
+        if not uri.startswith('%s:' % scheme):
+            raise WrongSchemeException("URI has to start with '%s:'" % scheme)
+
+        rest = uri.split(":", 1)[1]
+
+        email = None
+        for element in rest.split("&"):
+            if element == '': # tolerate a trailing ampersand
+                continue
+            pair = self.re_pair.match(element)
+            if not pair:
+                raise MalformedUriException("Format of URI data should be %s:a=b&c=d" % scheme)
+
+
+            key, value = pair.groups()
+            if key == 'to':
+                # file away the current email entry
+                if email:
+                    emails.append(email)
+                email = {
+                    'to': self.__decode_addresses(value),
+                }
+
+            else:
+                if not email:
+                    raise MalformedUriException("Start each new email with 'to='!")
+
+                if key in set(["cc", "bcc"]):
+                    email[key] = self.__decode_addresses(value)
+
+                elif key in set(["subject", "body"]):
+                    email[key] = self.__decode(value)
+
+                elif key == 'attachment':
+                    try:
+                        method, source, attachmentname = value.split(',', 2)
+                        if method not in ('local', 'url'):
+                            raise MalformedAttachmentException("Attachment '%s' specifies an unknown method." % value)
+                        if not 'attachment' in email:
+                            email['attachment'] = []
+                        email['attachment'].append(
+                            {'method': method, 'source': self.__decode(source), 'attachmentname': self.__decode(attachmentname)},
+                        )
+                    except ValueError, e:
+                        raise MalformedAttachmentException("Attachment '%s' has not the expected form." % value)
+
+                else:
+                    raise MalformedUriException("Found unknown key '%s'" % key)
+
+        if email:
+            emails.append(email)
+        
+        return emails
+
+class MailClientHandler():
+    def __init__(self, config):
+        self.config = config
+
+    def get_unhandled_safety_issues(self, emails):
+        unhandled = {}
+        for email in emails:
+            for attachment in email.get('attachment', []):
+                s = self.config.get_safety(attachment['method'], attachment['source'])
+                if not s:
+                    unhandled[self.config.get_region(attachment['method'], attachment['source'])] = attachment
+        return unhandled
+
+    def generate_email(self, email):
+        pass # override me
+
+    def download_attachments(self, email):
+        # Download non-local sources to temporary location.
+        # Regardless of source, places 'localsource' in email['attachment'][]
+        # with full path to local file ready for being attached.
+        try:
+            for att in email.get('attachment', []):
+                if att['method'] == 'local':
+                    att['localsource'] = att['source']
+                elif att['method'] == 'url':
+                    url = att['source']
+
+                    # urllib2 does not recognize embedded authentication credentials,
+                    # so we make that a proper Request header and cancel out the data
+                    # from the URL.
+                    pr = urlparse.urlparse(url)
+                    pair = '{0}:{1}'.format(pr.username, pr.password)
+                    if pr.username:
+                        url = url.replace(pair+'@', '', 1)
+
+                    req = urllib2.Request(url, None,
+                        {
+                            'User-Agent': 'mailtoplus/{}'.format(__version__),
+                        })
+
+                    if pr.username:
+                        req.add_header('Authorization', 'Basic {}'.format(base64.encodestring(pair)))
+
+                    try:
+                        r = urllib2.urlopen(req)
+                        filename = self.config.get_tempfilename(att['attachmentname'])
+
+                        with open(filename, 'w+b') as fp:
+                            att['localsource'] = filename
+                            shutil.copyfileobj(r, fp)
+                    except urllib2.URLError, e:
+                        raise DownloadException("URLError: {0} for URL {1}".format(e.message, att['source']))
+                    except urllib2.HTTPError, e2:
+                        raise DownloadException("HTTPError: " + e.message)
+        except Exception, e:
+            self.config.cleanup_tempdir()
+            raise e
+
+
+class MailAppHandler(MailClientHandler):
+
+    def __generate_applescript(self, email):
+        to = ['make new to recipient with properties {{address:"{}"}} at the end of to recipients'.format(
+            a) for a  in email['to']]
+        cc = ['make new cc recipient with properties {{address:"{}"}} at the end of to recipients'.format(
+            a) for a  in email.get('cc', [])]
+        bcc = ['make new bcc recipient with properties {{address:"{}"}} at the end of to recipients'.format(
+            a) for a  in email.get('bcc', [])]
+        atts = [u'make new attachment with properties {{file name:"{}"}} at after the last word of the last paragraph'.format(
+            a['localsource']) for a in email.get('attachment', []) ]
+        script = u"""
+on run
+    set theSignature to ""
+    tell application "Mail"
+        -- find first signature name
+        set everySignature to name of every signature
+        if (count of everySignature) is greater than 0 then
+            set theSignature to (item 1 of everySignature)
+        else
+            set theSignature to ""
+        end if
+        -- make new message
+        set newMail to make new outgoing message
+        tell newMail
+            set subject to "{subject}"
+            set content to "{body}"
+            set visible to true
+{to}
+{cc}
+{bcc}
+{attachments}
+        end tell
+        delay 1
+        if theSignature is not equal to "" then
+            set message signature of newMail to signature theSignature of application "Mail"
+        end if
+    end tell
+end run        
+""".format(
+        to      = u'\n'.join(to),
+        cc      = u'\n'.join(cc),
+        bcc     = u'\n'.join(bcc),
+        subject = email.get('subject', u''),
+        body    = email.get('body', u''),
+        attachments = u'\n'.join(atts),
+        )
+        return script
+
+    def execute_applescript(self, script):
+        p = Popen(['osascript', '-'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+        stdout, stderr = p.communicate(script.encode('utf-8'))
+        return (p.returncode, stdout, stderr)
+
+    def generate_email(self, email):
+        script = self.__generate_applescript(email)
+        rc, stdout, stderr = self.execute_applescript(script)
+        if rc != 0:
+            raise MailClientAutomationException("Automating Mail.app failed with returncode {0} "+
+                "and output '{1}' and '{2}'.".format(rc, stdout, stderr))
+
+def popup(message):
+    root = Tkinter.Tk()
+    root.withdraw()
+    tkMessageBox.showinfo(message, message)
+
+def handle_emails_macos_mailapp(uri):
+    mailtoplus = Mailtoplus()
+    config = ConfigManager()
+    try:
+        config.load_configuration(config.default_location())
+    except IOError:
+        config.clear()
+
+    emails = mailtoplus.parse_uri(uri)
+    mailapp = MailAppHandler(config)
+
+    unhandled = mailapp.get_unhandled_safety_issues(emails)
+    for issue, att in unhandled.items():
+        allow_now = tkMessageBox.askquestion("Authorize file attachment",
+            "The link wants to attach a file from '{0}'. Allow that?".format(issue),
+            icon='warning')
+        remember = tkMessageBox.askquestion("Remember that decision?",
+            "Should this decision be stored for future links?",
+            icon='warning')
+
+        if remember == 'yes':
+            config.set_safety(att['method'], att['source'], 'allowed' if allow_now == 'yes' else 'forbidden')
+            config.save_configuration(config.default_location())
+
+        if allow_now != 'yes':
+            # Abort processing.
+            return
+
+    for email in emails:
+        mailapp.download_attachments(email)
+        mailapp.generate_email(email)
+
+    time.sleep(10) # give Mail.app time to grab attachments
+
+    if len(emails) > 1:
+        popup('{0} emails created successfully!'.format(len(emails)))
+
+    config.cleanup_tempdir()
+
+if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        if platform.system() == 'Darwin':
+            # Calling the App on MacOS is the way to register the scheme.
+            popup("The {0}-scheme should now be registered.\nVersion {1}   {2}".format(scheme, __version__, __date__))
+        else:
+            popup("Please call this script with a mailtoplus-URI as the parameter!")
+    else:
+        if platform.system() == 'Darwin':
+            handle_emails_macos_mailapp(sys.argv[1])
+        else:
+            popup("Sorry, no support for anthing other than MacOS yet.")
