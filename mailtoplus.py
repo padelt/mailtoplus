@@ -39,8 +39,8 @@ __author__ = "Philipp Adelt"
 __copyright__ = "Copyright 2014"
 __credits__ = ["Philipp Adelt"]
 __license__ = "Apache License 2.0"
-__version__ = "2.0.4"
-__date__ = "2014-11-27"
+__version__ = "2.0.6"
+__date__ = "2014-12-01"
 __maintainer__ = "Philipp Adelt"
 __email__ = "autosort-github@philipp.adelt.net"
 __status__ = "Release"
@@ -359,12 +359,14 @@ on run
         set newMail to make new outgoing message
         tell newMail
             set subject to "{subject}"
-            set content to "{body}"
-            set visible to true
+            set content to "{body}"& "
+
+"
 {to}
 {cc}
 {bcc}
 {attachments}
+            set visible to true
         end tell
         delay 1
         if theSignature is not equal to "" then

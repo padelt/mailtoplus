@@ -13,8 +13,8 @@ OPTIONS = {
     'argv_emulation': True,
     'plist': dict(
         CFBundleName='mailtoplus',
-        CFBundleShortVersionString='2.0.3',
-        CFBundleVersion='2.0.3',
+        CFBundleShortVersionString='2.0.6',
+        CFBundleVersion='2.0.6',
         CFBundleIdentifier='net.adelt.philipp.mailtoplus',
         CFBundleURLTypes=[dict(
             CFBundleURLName='mailtoplus',
