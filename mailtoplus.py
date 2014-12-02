@@ -33,14 +33,14 @@ import yaml
 import base64
 import time
 import platform
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, call
 
 __author__ = "Philipp Adelt"
 __copyright__ = "Copyright 2014"
 __credits__ = ["Philipp Adelt"]
 __license__ = "Apache License 2.0"
-__version__ = "2.0.6"
-__date__ = "2014-12-01"
+__version__ = "2.0.7"
+__date__ = "2014-12-02"
 __maintainer__ = "Philipp Adelt"
 __email__ = "autosort-github@philipp.adelt.net"
 __status__ = "Release"
@@ -342,7 +342,7 @@ class MailAppHandler(MailClientHandler):
             a) for a  in email.get('cc', [])]
         bcc = ['make new bcc recipient with properties {{address:"{}"}} at the end of to recipients'.format(
             a) for a  in email.get('bcc', [])]
-        atts = [u'make new attachment with properties {{file name:"{}"}} at after the last word of the last paragraph'.format(
+        atts = [u'make new attachment with properties {{file name:"{}"}}'.format(
             a['localsource']) for a in email.get('attachment', []) ]
         script = u"""
 on run
@@ -365,13 +365,13 @@ on run
 {to}
 {cc}
 {bcc}
-{attachments}
             set visible to true
+            if theSignature is not equal to "" then
+                set message signature of newMail to signature theSignature of application "Mail"
+            end if
+{attachments}
         end tell
-        delay 1
-        if theSignature is not equal to "" then
-            set message signature of newMail to signature theSignature of application "Mail"
-        end if
+        activate
     end tell
 end run        
 """.format(
@@ -437,6 +437,10 @@ def handle_emails_macos_mailapp(uri):
 
     if len(emails) > 1:
         popup('{0} emails created successfully!'.format(len(emails)))
+
+    call(['logger', 'Mailtoplus finished {0} emails successfully. Version {1} {2} running with sys.argv: {3}'.format(
+        len(emails), __version__, __date__, str(sys.argv)
+        )])
 
     config.cleanup_tempdir()
 
