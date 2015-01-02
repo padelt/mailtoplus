@@ -33,14 +33,15 @@ import yaml
 import base64
 import time
 import platform
+import logging
 from subprocess import Popen, PIPE, call
 
 __author__ = "Philipp Adelt"
-__copyright__ = "Copyright 2014"
+__copyright__ = "Copyright 2014,2015"
 __credits__ = ["Philipp Adelt"]
 __license__ = "Apache License 2.0"
-__version__ = "2.0.7"
-__date__ = "2014-12-02"
+__version__ = "2.1.0"
+__date__ = "2015-01-02"
 __maintainer__ = "Philipp Adelt"
 __email__ = "autosort-github@philipp.adelt.net"
 __status__ = "Release"
@@ -76,6 +77,17 @@ def fileurl2path(fileurl):
 
 def path2fileurl(path):
     return "file://{0}".format(path).replace("\\", "/")
+
+def initial_logging():
+    log = logging.getLogger(__name__)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.CRITICAL)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    log.addHandler(ch)
+    return log
+
+logger = initial_logging()
 
 class ConfigManager():
     def __init__(self):
@@ -134,6 +146,33 @@ class ConfigManager():
             for key, value in options.items():
                 if isinstance(key, basestring) and isinstance(value, basestring):
                     self.configuration['options'][key] = value
+
+    def setup_logging(self):
+        """If the configuration contains the key 'logfile' in the options-dict,
+        the python logging is setup to the filename assumed to be in the key.
+        The optional parameter 'loglevel' in the options-dict can be DEBUG,
+        INFO (default), WARNING, ERROR or CRITICAL.
+        If no logfile is specified, this is a no-op.
+        """
+        logfile = self.configuration['options'].get('logfile', None)
+        if logfile and isinstance(logfile, basestring):
+            ch = logging.FileHandler(logfile)
+
+            level = self.configuration['options'].get('loglevel', None)
+            if not level:
+                level = 'INFO'
+
+            ch.setLevel({
+                'DEBUG': logging.DEBUG,
+                'INFO': logging.INFO,
+                'WARNING': logging.WARNING,
+                'ERROR': logging.ERROR,
+                'CRITICAL': logging.CRITICAL,
+                }.get(level, logging.INFO))
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            ch.setFormatter(formatter)
+            logger.addHandler(ch)
+
 
     def write_configuration(self, filelike):
         filelike.write(yaml.dump(self.configuration))
@@ -408,8 +447,14 @@ def handle_emails_macos_mailapp(uri):
         config.load_configuration(config.default_location())
     except IOError:
         config.clear()
+    config.setup_logging()
 
-    emails = mailtoplus.parse_uri(uri)
+    try:
+        emails = mailtoplus.parse_uri(uri)
+    except Exception, e:
+        msg = "Parser failed for %s, original exception: %s" % (repr(uri), str(e))
+        logger.critical(msg)
+        raise Exception(msg)
     mailapp = MailAppHandler(config)
 
     unhandled = mailapp.get_unhandled_safety_issues(emails)
