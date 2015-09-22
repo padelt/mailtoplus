@@ -7,7 +7,7 @@ locations via HTTP/HTTPS.
 To control Mail.app, an AppleScript is launched.
 """
 """
-   Copyright 2014 Philipp Adelt
+   Copyright 2014-2015 Philipp Adelt
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -40,8 +40,8 @@ __author__ = "Philipp Adelt"
 __copyright__ = "Copyright 2014,2015"
 __credits__ = ["Philipp Adelt"]
 __license__ = "Apache License 2.0"
-__version__ = "2.1.0"
-__date__ = "2015-01-02"
+__version__ = "2.1.1"
+__date__ = "2015-09-22"
 __maintainer__ = "Philipp Adelt"
 __email__ = "autosort-github@philipp.adelt.net"
 __status__ = "Release"
@@ -354,7 +354,7 @@ class MailClientHandler():
                         })
 
                     if pr.username:
-                        req.add_header('Authorization', 'Basic {}'.format(base64.encodestring(pair)))
+                        req.add_header('Authorization', 'Basic {}'.format(base64.b64encode(pair)))
 
                     try:
                         r = urllib2.urlopen(req)
