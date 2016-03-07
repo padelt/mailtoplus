@@ -6,6 +6,7 @@ Usage:
 """
 
 from setuptools import setup
+from mailtoplus import __version__ as mailtoplusversion
 
 APP = ['mailtoplus.py']
 DATA_FILES = []
@@ -13,8 +14,8 @@ OPTIONS = {
     'argv_emulation': True,
     'plist': dict(
         CFBundleName='mailtoplus',
-        CFBundleShortVersionString='2.1.0',
-        CFBundleVersion='2.1.0',
+        CFBundleShortVersionString=mailtoplusversion,
+        CFBundleVersion=mailtoplusversion,
         CFBundleIdentifier='net.adelt.philipp.mailtoplus',
         CFBundleURLTypes=[dict(
             CFBundleURLName='mailtoplus',

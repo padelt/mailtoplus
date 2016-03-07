@@ -22,26 +22,27 @@ To control Mail.app, an AppleScript is launched.
    limitations under the License.
 """
 
-import sys
+import base64
+import logging
+import os.path
+import platform
 import re
+import shutil
+import ssl
+from subprocess import Popen, PIPE, call
+import sys
+import tempfile
+import time
 import urllib2
 import urlparse
-import shutil
-import tempfile
-import os.path
 import yaml
-import base64
-import time
-import platform
-import logging
-from subprocess import Popen, PIPE, call
 
 __author__ = "Philipp Adelt"
 __copyright__ = "Copyright 2014,2015"
 __credits__ = ["Philipp Adelt"]
 __license__ = "Apache License 2.0"
-__version__ = "2.1.1"
-__date__ = "2015-09-22"
+__version__ = "2.2.2"
+__date__ = "2016-03-07"
 __maintainer__ = "Philipp Adelt"
 __email__ = "autosort-github@philipp.adelt.net"
 __status__ = "Release"
@@ -81,7 +82,7 @@ def path2fileurl(path):
 def initial_logging():
     log = logging.getLogger(__name__)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.CRITICAL)
+    ch.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     log.addHandler(ch)
@@ -99,7 +100,9 @@ class ConfigManager():
     def clear(self):
         self.configuration = {
             'safe_regions': {},
-            'options': {},
+            'options': {
+                'ssl': 'secure',
+            },
         }
 
     def load_configuration(self, fullfilename):
@@ -334,6 +337,7 @@ class MailClientHandler():
         # Regardless of source, places 'localsource' in email['attachment'][]
         # with full path to local file ready for being attached.
         try:
+            ssl_insecure = ('insecure' == self.config.configuration.get('options', {}).get('ssl', 'secure'))
             for att in email.get('attachment', []):
                 if att['method'] == 'local':
                     att['localsource'] = att['source']
@@ -357,14 +361,36 @@ class MailClientHandler():
                         req.add_header('Authorization', 'Basic {}'.format(base64.b64encode(pair)))
 
                     try:
-                        r = urllib2.urlopen(req)
+                        if ssl_insecure:
+                            ctx = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+                            r = urllib2.urlopen(req, context=ctx)
+                        else:
+                            r = urllib2.urlopen(req)
+
                         filename = self.config.get_tempfilename(att['attachmentname'])
 
                         with open(filename, 'w+b') as fp:
                             att['localsource'] = filename
                             shutil.copyfileobj(r, fp)
                     except urllib2.URLError, e:
-                        raise DownloadException("URLError: {0} for URL {1}".format(e.message, att['source']))
+                        if "CERTIFICATE_VERIFY_FAILED" in str(e.reason):
+                            if ssl_insecure:
+                                raise DownloadException("URLError: CERTIFICATE_VERFIY_FAILED despite ssl_insecure! {0} for URL {1}".format(e.reason, att['source']))
+                            else:
+                                disable = tkMessageBox.askquestion("Disable certificate validation?",
+                                    "SSL certificate could not be verified. Permanently disable this check? "+
+                                    "'Yes' will disable the check and allow attackers to read the requests.\n\n",
+                                    icon='warning')
+                                if disable == 'yes':
+                                    if not 'options' in self.config.configuration:
+                                        self.config.configuration['options'] = {}
+                                    self.config.configuration['options']['ssl'] = 'insecure'
+                                    self.config.save_configuration(self.config.default_location())
+                                    ssl_insecure = True
+                                popup("Since this request failed, you need to retry. Bye!")
+                                sys.exit(1)
+
+                        raise DownloadException("URLError: {0} for URL {1}".format(e.reason, att['source']))
                     except urllib2.HTTPError, e2:
                         raise DownloadException("HTTPError: " + e.message)
         except Exception, e:
