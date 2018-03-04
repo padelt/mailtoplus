@@ -7,7 +7,7 @@ locations via HTTP/HTTPS.
 To control Mail.app, an AppleScript is launched.
 """
 """
-   Copyright 2014-2015 Philipp Adelt
+   Copyright 2014-2018 Philipp Adelt
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ import re
 import shutil
 import ssl
 from subprocess import Popen, PIPE, call
+import traceback
 import sys
 import tempfile
 import time
@@ -41,8 +42,8 @@ __author__ = "Philipp Adelt"
 __copyright__ = "Copyright 2014,2015"
 __credits__ = ["Philipp Adelt"]
 __license__ = "Apache License 2.0"
-__version__ = "2.2.2"
-__date__ = "2016-03-07"
+__version__ = "2.2.4"
+__date__ = "2018-03-04"
 __maintainer__ = "Philipp Adelt"
 __email__ = "autosort-github@philipp.adelt.net"
 __status__ = "Release"
@@ -459,9 +460,10 @@ end run
         rc, stdout, stderr = self.execute_applescript(script)
         if rc != 0:
             raise MailClientAutomationException("Automating Mail.app failed with returncode {0} "+
-                "and output '{1}' and '{2}'.".format(rc, stdout, stderr))
+                "and output '{1}' and '{2}'. Script was: {3}".format(rc, stdout, stderr, script))
 
 def popup(message):
+    syslog_this(message)
     root = Tkinter.Tk()
     root.withdraw()
     tkMessageBox.showinfo(message, message)
@@ -501,8 +503,13 @@ def handle_emails_macos_mailapp(uri):
             return
 
     for email in emails:
-        mailapp.download_attachments(email)
-        mailapp.generate_email(email)
+        try:
+            mailapp.download_attachments(email)
+            mailapp.generate_email(email)
+        except:
+            logger.exception("Download or Generate failed.")
+            popup("Exception: %s" % traceback.format_exc())
+            raise
 
     time.sleep(10) # give Mail.app time to grab attachments
 
@@ -514,6 +521,9 @@ def handle_emails_macos_mailapp(uri):
         )])
 
     config.cleanup_tempdir()
+
+def syslog_this(message):
+    call(['logger', message])
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
