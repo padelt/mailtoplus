@@ -39,7 +39,7 @@ import urlparse
 import yaml
 
 __author__ = "Philipp Adelt"
-__copyright__ = "Copyright 2014,2015"
+__copyright__ = "Copyright 2014-2018"
 __credits__ = ["Philipp Adelt"]
 __license__ = "Apache License 2.0"
 __version__ = "2.2.4"
