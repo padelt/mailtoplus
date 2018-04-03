@@ -42,8 +42,8 @@ __author__ = "Philipp Adelt"
 __copyright__ = "Copyright 2014-2018"
 __credits__ = ["Philipp Adelt"]
 __license__ = "Apache License 2.0"
-__version__ = "2.2.4"
-__date__ = "2018-03-04"
+__version__ = "2.3.0"
+__date__ = "2018-04-103"
 __maintainer__ = "Philipp Adelt"
 __email__ = "autosort-github@philipp.adelt.net"
 __status__ = "Release"
@@ -414,32 +414,63 @@ class MailAppHandler(MailClientHandler):
 on run
     set theSignature to ""
     tell application "Mail"
-        -- find first signature name
-        set everySignature to name of every signature
-        if (count of everySignature) is greater than 0 then
-            set theSignature to (item 1 of everySignature)
+        set _mailbox to my find_mailbox(mailboxes)
+        if _mailbox = "" then
+            my logit("no mailbox found")
         else
-            set theSignature to ""
+            my logit("found: " & (name of _mailbox))
+        end if
+        
+        set _message to ""
+        if _mailbox is not "" then
+            my logit("mailtoplus folder: " & " " & (name of _mailbox) & (count of _mailbox's messages))
+            if (count of _mailbox's messages) > 0 then
+                set _message to item 1 in _mailbox's messages
+                my logit("mailtoplus message: " & (subject of _message))
+                my logit("mailtoplus body: " & (content of _message))
+            end if
         end if
         -- make new message
         set newMail to make new outgoing message
         tell newMail
             set subject to "{subject}"
-            set content to "{body}"& "
+            if _message is not "" then
+				set content to "{body}" & (content of _message)
+			else
+                set content to "{body}"& "
 
 "
+			end if
+
 {to}
 {cc}
 {bcc}
             set visible to true
-            if theSignature is not equal to "" then
-                set message signature of newMail to signature theSignature of application "Mail"
-            end if
+            -- set message signature of newMail to first signature of application "Mail"
 {attachments}
         end tell
         activate
     end tell
-end run        
+end run
+to logit(log_string)
+	set log_file to "mailtoplus-as.log"
+	do shell script "echo `date '+%Y-%m-%d %T: '`\\"" & log_string & "\\" >> $HOME/Library/Logs/" & log_file
+end logit
+to find_mailbox(_mailboxes)
+	if (count of _mailboxes) = 0 then
+		return ""
+	end if
+	
+	repeat with _mailbox in _mailboxes
+		logit("Looked at: " & (name of _mailbox))
+		if (name of _mailbox) starts with "mailtoplus" then
+			my logit("Returning: " & (name of _mailbox))
+			return _mailbox
+		end if
+	end repeat
+	return ""
+	
+end find_mailbox
 """.format(
         to      = u'\n'.join(to),
         cc      = u'\n'.join(cc),
@@ -460,7 +491,7 @@ end run
         rc, stdout, stderr = self.execute_applescript(script)
         if rc != 0:
             raise MailClientAutomationException("Automating Mail.app failed with returncode {0} "+
-                "and output '{1}' and '{2}'. Script was: {3}".format(rc, stdout, stderr, script))
+                "and output '{1}' and '{2}'. Script was: {3}".format(rc, repr(stdout), repr(stderr), repr(script)))
 
 def popup(message):
     syslog_this(message)

@@ -66,6 +66,9 @@ stored in `~/.mailtoplus.conf`. The directory `~/.mailtoplus-temp/` is
 used to temporarily store the downloaded files until Mail.app could
 grab them.
 
+If you create a folder named `mailtoplus` in Mail.app, the body of the
+first mail in there will be appended to the new email's body.
+
 If multiple emails are created, mailtoplus will show a popup with the
 number of emails created after the work is done.
 
